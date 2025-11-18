@@ -1,0 +1,33 @@
+# all packages are latest stable versions
+llama-index==0.14.8
+llama-index-core==0.14.8
+llama-index-readers-file==0.5.4 # Reverting to the latest available version
+llama-index-vector-stores-chroma==0.5.3 # Reverting to your original version
+llama-index-embeddings-huggingface
+llama-index-llms-huggingface
+
+chromadb==1.3.4 
+
+sentence-transformers==5.1.2
+
+fastapi==0.115.0
+uvicorn==0.30.6
+
+python-dotenv==1.0.1
+
+langchain==1.0.7
+langchain-core==1.0.5
+langgraph==1.0.2
+
+python-multipart==0.0.20
+
+pydantic
+pypdf
+python-docx
+unstructured
+tiktoken
+requests
+streamlit
+watchdog
+
+
