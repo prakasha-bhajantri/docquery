@@ -1,13 +1,85 @@
-import gradio as gr
+import streamlit as st
 import requests
-import json
 import os
 from typing import List, Tuple
 
 # --- CONFIGURATION ---
 API_URL = "http://127.0.0.1:8000" # Your FastAPI server address
 
+# --- 0. CUSTOM CSS INJECTION ---
+def inject_custom_css():
+    st.markdown("""
+        <style>
+        /* ==== FIXED CUSTOM HEADER WITH TITLE ==== */
+        .fixed-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 70px;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            padding: 0 2rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        /* Keep Streamlit's top-right icons visible */
+        [data-testid="stHeader"]::before {
+            content: "DocQuery - Chat with your Documents";
+            position: absolute;
+            left: 5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            z-index: 9999;
+        }
+
+        /* Push entire app content down below fixed header */
+        .block-container {
+            padding-top: 90px !important;
+        }
+
+        /* ==== WIDTH CONTROL FOR WIDE LAYOUT ==== */
+        /* Main container with controlled max-width */
+        .main .block-container {
+        max-width: 1400px !important;
+        padding-left: 2rem;
+        padding-right: 2rem;
+        margin: 0 auto !important;
+        }
+
+        /* Chat area specific width control */
+        [data-testid="stVerticalBlock"] {
+        max-width: 1000px !important;
+        margin: 0 auto !important;
+        }
+
+
+        /* When sidebar is collapsed, expand slightly */
+        [data-testid="stSidebar"][aria-expanded="false"] ~ .main .block-container {
+        max-width: 1600px !important;
+        }
+
+        [data-testid="stSidebar"][aria-expanded="false"] ~ .main [data-testid="stVerticalBlock"] {
+        max-width: 1200px !important;
+        }
+
+        [data-testid="stSidebar"][aria-expanded="false"] ~ .main [data-testid="stChatInput"] {
+        max-width: 1200px !important;
+        }
+
+        </style>
+        """, unsafe_allow_html=True)
+
 # 1. UI Helper Functions (to interact with FastAPI)
+
+@st.cache_data(show_spinner=False)
 def get_indexed_documents() -> Tuple[List[str], str]:
     """Fetches the list of indexed documents and the selected document from the API."""
     try:
@@ -17,104 +89,125 @@ def get_indexed_documents() -> Tuple[List[str], str]:
         doc_list = data.get("documents", [])
         selected_doc = data.get("selected_document", "")
         return doc_list, selected_doc 
-        
     except Exception:
-        # Return empty list and empty string on error
         return [], "" 
 
-# NOTE: update_doc_display is retained but currently unused in the simplified UI
-def update_doc_display(doc_list: List[str], selected_doc: str) -> str:
-    """Formats the document list for display with a selection indicator."""
-    if not doc_list:
-        return "No documents indexed. Upload a file to begin chatting."
-        
-    display_text = "Indexed Documents:\n"
-    for doc in doc_list:
-        # Add an indicator to the selected document
-        indicator = "✅" if doc == selected_doc else "◻️"
-        display_text += f"{indicator} **{doc}**\n"
-        
-    return display_text
+def format_status(filename: str, message: str, color: str = 'red') -> str:
+    """Formats the status message, coloring only the filename."""
+    colored_filename = f"<span style='color:{color};'>**{filename}**</span>"
+    return message.replace(f"**{filename}**", colored_filename)
 
-def upload_and_index(file) -> Tuple[str, List[str], str, None]:
-    """Uploads a file to the API for indexing."""
-    if file is None:
-        doc_list, selected_doc = get_indexed_documents()
-        return "Please select a file to upload.", doc_list, selected_doc, None
+def set_initial_state():
+    """Initializes Streamlit session state variables."""
+    if 'doc_list' not in st.session_state or 'selected_doc' not in st.session_state:
+        st.session_state.doc_list, st.session_state.selected_doc = get_indexed_documents()
+        
+        if st.session_state.doc_list and not st.session_state.selected_doc:
+            st.session_state.selected_doc = st.session_state.doc_list[0]
+            select_document_api(st.session_state.selected_doc) 
+
+    if 'upload_status' not in st.session_state:
+        st.session_state.upload_status = "Ready to index."
     
-    file_path = file.name
+    if 'messages' not in st.session_state:
+        st.session_state.messages = []
+
+def select_document_api(filename: str):
+    """Sets the active document for QA via the API and updates state."""
+    if not filename:
+        st.session_state.upload_status = "Please select a file."
+        return
+
+    try:
+        response = requests.post(f"{API_URL}/select_document", json={"filename": filename})
+        response.raise_for_status()
+        st.session_state.selected_doc = filename
+        message = f"Document **{filename}** set as active for QA and loaded from index."
+        st.session_state.upload_status = format_status(filename, message, 'red')
+        
+    except Exception as e:
+        st.session_state.upload_status = f"Error selecting document: {e}"
+
+def upload_and_index_action(uploaded_file):
+    """Uploads file to API, refreshes state, and sets new file as active."""
+    if uploaded_file is None:
+        st.session_state.upload_status = "Please select a file to upload."
+        return
     
     try:
-        original_filename = os.path.basename(file_path) 
+        temp_dir = "/tmp/rag_uploads"
+        os.makedirs(temp_dir, exist_ok=True)
+        file_path = os.path.join(temp_dir, uploaded_file.name)
         
-        # FastAPI expects the file via a multipart form
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        original_filename = uploaded_file.name
+        
         with open(file_path, "rb") as f:
             files = {"file": (original_filename, f, "multipart/form-data")}
             response = requests.post(f"{API_URL}/upload", files=files)
             response.raise_for_status() 
             
-        message = response.json().get("status", "Indexing complete.")
         
-        # After successful upload, refresh the list and selected doc state
-        doc_list, selected_doc = get_indexed_documents()
+        full_message = f"Success! **{original_filename}** indexing complete."
+        st.session_state.upload_status = format_status(original_filename, full_message, 'red')        
         
-        # Return 4 outputs: Status, Doc List State, Selected Doc State, Cleared File Component (None)
-        return f"Success! {message}", doc_list, selected_doc, None
-            
+        get_indexed_documents.clear()
+        
+        new_doc_list, _ = get_indexed_documents()
+        
+        st.session_state.doc_list = new_doc_list
+        select_document_api(original_filename)
+
     except requests.HTTPError as e:
         error_detail = e.response.json().get("detail", str(e))
-        doc_list, selected_doc = get_indexed_documents()
-        return f"Error indexing file: {error_detail}", doc_list, selected_doc, None
+        st.session_state.upload_status = f"Error indexing file: {error_detail}"
     except Exception as e:
-        doc_list, selected_doc = get_indexed_documents()
-        return f"An unexpected error occurred: {type(e).__name__}: {e}", doc_list, selected_doc, None
+        st.session_state.upload_status = f"An unexpected error occurred: {type(e).__name__}: {e}"
+        if os.path.exists(file_path):
+             os.remove(file_path)
 
-def select_document(filename: str) -> Tuple[str, List[str], str]:
-    """Sets the active document for QA."""
+
+def delete_document_action(filename: str):
+    """Deletes the selected document from the index and updates state."""
     if not filename:
-        doc_list, selected_doc = get_indexed_documents()
-        return "Please select a file.", doc_list, selected_doc
+        st.session_state.upload_status = "Please select a file to delete."
+        return
         
     try:
-        response = requests.post(f"{API_URL}/select_document", json={"filename": filename})
-        response.raise_for_status()
-        
-        # Re-fetch the list to get the new selected document state
-        doc_list, selected_doc = get_indexed_documents()
-        
-        return f"Document **{filename}** set as active for QA.", doc_list, selected_doc
-    except Exception as e:
-        doc_list, selected_doc = get_indexed_documents()
-        return f"Error selecting document: {e}", doc_list, selected_doc
-
-
-def delete_document(filename: str) -> Tuple[str, List[str], str]:
-    """Deletes the selected document from the index."""
-    if not filename:
-        doc_list, selected_doc = get_indexed_documents()
-        return "Please select a file to delete.", doc_list, selected_doc
-        
-    try:
-        # Use DELETE method for deletion endpoint
         response = requests.delete(f"{API_URL}/document/{filename}")
         response.raise_for_status()
         
-        # Re-fetch the list to update the display
-        doc_list, selected_doc = get_indexed_documents()
+        message = f"Document **{filename}** deleted successfully."
+        st.session_state.upload_status = format_status(filename, message, 'red')
+
+        get_indexed_documents.clear()
         
-        return f"Document **{filename}** deleted successfully.", doc_list, selected_doc
+        st.session_state.doc_list, _ = get_indexed_documents()
+        
+        if st.session_state.selected_doc == filename:
+            st.session_state.selected_doc = st.session_state.doc_list[0] if st.session_state.doc_list else ""
+            if st.session_state.selected_doc:
+                 select_document_api(st.session_state.selected_doc)
+            else:
+                 clear_message = f" (Active document cleared)."
+                 st.session_state.upload_status += clear_message
+
+
     except requests.HTTPError as e:
         error_detail = e.response.json().get("detail", str(e))
-        doc_list, selected_doc = get_indexed_documents()
-        return f"Error deleting file: {error_detail}", doc_list, selected_doc
+        error_message = f"Error deleting file: **{filename}**. Details: {error_detail}"
+        st.session_state.upload_status = format_status(filename, error_message, 'red')
     except Exception as e:
-        doc_list, selected_doc = get_indexed_documents()
-        return f"An unexpected error occurred during deletion: {e}", doc_list, selected_doc
+        st.session_state.upload_status = f"An unexpected error occurred during deletion: {e}"
 
-# 2. Chat Function
-def chat_with_api(message, history) -> str:
-    """Sends user message and history to the FastAPI chat endpoint."""
+def chat_with_api_action(message) -> str:
+    """Sends user message to the FastAPI chat endpoint."""
     try:
+        if not st.session_state.selected_doc:
+            return "Please select an active document before chatting."
+            
         response = requests.post(
             f"{API_URL}/query", 
             json={"query": message}
@@ -124,113 +217,93 @@ def chat_with_api(message, history) -> str:
     except Exception as e:
         return f"An error occurred while querying the RAG API. Is the FastAPI backend running? Details: {e}"
 
-# 3. Gradio Interface Layout
-# Get initial state
-initial_docs, initial_selected = get_indexed_documents()
+# --- STREAMLIT APP LAYOUT ---
 
-# FIX for startup warnings: Ensure initial_selected is a valid choice if documents exist
-if initial_docs and not initial_selected:
-    initial_selected = initial_docs[0]
+# Set page config for better layout control
+st.set_page_config(
+    page_title="DocQuery - Chat with your Documents",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
+# 0. Setup Initial State
+set_initial_state()
 
-with gr.Blocks(title="DocQuery: Chat with your documents") as demo:
-    gr.Markdown("# 📜 DocQuery: Chat with your Documents (RAG Demo)")
+# Inject Custom CSS
+inject_custom_css()
+
+# 1. Main Title
+
+# 2. Sidebar for Document Management
+with st.sidebar:
+    st.header("📄 Document Management")
     
-    # Hidden State to track the document list and selected document (needed for chaining)
-    doc_list_state = gr.State(value=initial_docs) 
-    selected_doc_state = gr.State(value=initial_selected)
+    # 2.1 Document Selector/Deleter
+    st.subheader("📚 Select Active Document")
+    
+    current_index = 0
+    if st.session_state.doc_list and st.session_state.selected_doc in st.session_state.doc_list:
+        current_index = st.session_state.doc_list.index(st.session_state.selected_doc)
+    
+    st.selectbox(
+        label="Select Indexed Document to Chat With",
+        options=st.session_state.doc_list,
+        index=current_index,
+        key='doc_selector',
+        on_change=lambda: select_document_api(st.session_state.doc_selector)
+    )
 
-    with gr.Row():
-        # --- Sidebar for Document Management (Left Column) ---
-        with gr.Column(scale=1):
-            
-            # 1. Document Selector/Deleter Section (TOP)
-            gr.Markdown("### 📚 Select Active Document")
-            
-            # DROPDOWN
-            doc_dropdown = gr.Dropdown(
-                label="Select Indexed Document to Chat With",
-                choices=initial_docs,
-                value=initial_selected, # Default selection (now safer)
-                interactive=True
-            )
-            
-            # Action buttons for the dropdown
-            with gr.Row():
-                delete_button = gr.Button("Delete Selected Document 🗑️", variant="stop") 
-            
-            gr.Markdown("---")
-            
-            # 2. File Upload Section (BELOW SELECTION, COMPACT)
-            gr.Markdown("### ⬆️ Upload New Document")
-            
-            # FILE UPLOAD (Height maintained)
-            file_upload = gr.File(
-                label="Upload Document (.pdf, .txt, .docx)", 
-                type="filepath", 
-                file_types=[".pdf", ".txt", ".docx"],
-                height=140
-            )
-            upload_button = gr.Button("Upload and Index")
-            
-            # STATUS BOX (Lines maintained)
-            upload_output = gr.Textbox(
-                label="Indexing Status", 
-                value="Ready to index.", 
-                interactive=False, 
-                lines=3
-            )
-            
-            
-            # --- Event Actions ---
-            
-            # Helper function to update the Dropdown (Uses Gradio 4.x syntax)
-            def update_ui_components(d_list, s_doc):
-                return [gr.Dropdown(choices=d_list, value=s_doc)]
+    # Delete Button
+    st.button(
+        "Delete Selected Document 🗑️", 
+        type="primary", 
+        on_click=delete_document_action, 
+        args=(st.session_state.doc_selector,),
+        disabled=not st.session_state.doc_list
+    )
+    
+    st.markdown("---")
+    
+    # 2.2 File Upload Section
+    st.subheader("⬆️ Upload New Document")
+    
+    uploaded_file = st.file_uploader(
+        "Upload Document (.pdf, .txt, .docx)",
+        type=["pdf", "txt", "docx"],
+        key="file_uploader"
+    )
+    
+    st.button(
+        "Upload and Index", 
+        on_click=upload_and_index_action, 
+        args=(uploaded_file,)
+    )
+    
+    # Status Message Display
+    st.subheader("Indexing Status")
+    st.markdown(st.session_state.upload_status, unsafe_allow_html=True)
 
-            # 1. Upload Action
-            upload_button.click(
-                fn=upload_and_index,
-                inputs=[file_upload],
-                outputs=[upload_output, doc_list_state, selected_doc_state, file_upload]
-            ).then(
-                fn=update_ui_components,
-                inputs=[doc_list_state, selected_doc_state],
-                outputs=[doc_dropdown] 
-            )
-            
-            # 2. SELECTION ACTION (Dropdown Change)
-            doc_dropdown.change(
-                fn=select_document, 
-                # FIX: inputs=[] ensures the selected string value is passed correctly,
-                # resolving the "Dropdown object not in choices" error.
-                inputs=[], 
-                outputs=[upload_output, doc_list_state, selected_doc_state]
-            ).then(
-                fn=update_ui_components,
-                inputs=[doc_list_state, selected_doc_state],
-                outputs=[doc_dropdown] 
-            )
 
-            # 3. Delete Action
-            delete_button.click(
-                fn=delete_document,
-                inputs=[doc_dropdown], # Must be listed to get the current selected value
-                outputs=[upload_output, doc_list_state, selected_doc_state]
-            ).then(
-                fn=update_ui_components,
-                inputs=[doc_list_state, selected_doc_state],
-                outputs=[doc_dropdown]
-            )
-            
-        # --- Main Chat Interface (Right Column) ---
-        with gr.Column(scale=3):
-            gr.Markdown("## 💬 Chat with Indexed Documents")
-            gr.ChatInterface(
-                fn=chat_with_api,
-                title="DocQuery Chat",
-            )
-            
-# Launch the Gradio UI
-if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+# 3. Main Chat Interface
+# Display chat messages from history on app rerun
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# React to user input
+if prompt := st.chat_input(f"Ask about: {st.session_state.selected_doc if st.session_state.selected_doc else 'No Document Selected'}..."):
+    # Display user message in chat message container
+    with st.chat_message("user"):
+        st.markdown(prompt)
+    # Add user message to chat history
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    # Get assistant response
+    response = chat_with_api_action(prompt)
+    
+    # Display assistant response in chat message container
+    with st.chat_message("assistant"):
+        st.markdown(response)
+    # Add assistant response to chat history
+    st.session_state.messages.append({"role": "assistant", "content": response})
