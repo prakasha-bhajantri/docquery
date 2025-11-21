@@ -2,9 +2,17 @@ import streamlit as st
 import requests
 import os
 from typing import List, Tuple
+from dotenv import load_dotenv
+
+# Load environment variables (CRITICAL: Must be run before initializing NVIDIA classes)
+load_dotenv() 
+
+API_URL = st.secrets.get("API_URL", "http://127.0.0.1:8000")
 
 # --- CONFIGURATION ---
-API_URL = "http://127.0.0.1:8000" # Your FastAPI server address
+# API_URL = "http://127.0.0.1:8000" # Your FastAPI server address
+
+# API_URL = os.getenv("API_URL")
 
 # --- 0. CUSTOM CSS INJECTION ---
 def inject_custom_css():
