@@ -26,10 +26,14 @@ COLLECTION_NAME = "my_rag_collection"
 TEMP_UPLOAD_DIR = "./temp_uploads"
 
 # --- LLM Settings ---
+MODEL_LLM = os.getenv("MODEL_LLM")
+MODEL_EMBEDDINGS = os.getenv("MODEL_EMBEDDINGS")
+
 # CRITICAL: The NVIDIA connectors automatically use the NVIDIA_API_KEY from os.environ
-Settings.embed_model = NVIDIAEmbedding(model_name="nvidia/nv-embedqa-mistral-7b-v2")
+Settings.embed_model = NVIDIAEmbedding(model_name=MODEL_EMBEDDINGS)
+
 Settings.llm = NVIDIA(
-    model="meta/llama-3.1-8b-instruct",
+    model=MODEL_LLM,
     max_tokens=256,
     temperature=0.0,
     stop_sequences=["\n\n", "</s>", "<|eot_id|>", "Answer:", "Thank you", "Here is"],
@@ -40,6 +44,7 @@ SYSTEM_PROMPT = (
     "DO NOT add any introductory phrases, conversational fillers, or polite sign-offs. "
     "If the answer is not in the context, say 'I do not know' and nothing else."
     "Always maintain a concise and factual tone."
+    "When some one says hi/greetings, just greet them nicely with Hi and say what do you want to know from yur document"
 )
 
 class RAGService:
@@ -70,10 +75,7 @@ class RAGService:
 
     def _create_chat_engine(self) -> ContextChatEngine:
         """Initializes/Re-initializes the ContextChatEngine."""
-        # Note: If you want the RAG to only search the SELECTED document,
-        # you would need to add a metadata filter here. For simplicity,
-        # the current retriever searches *all* documents, but the selected_document
-        # tracking is still useful for UI feedback and deletion logic.
+
         retriever = self.index.as_retriever(similarity_top_k=5)
         memory = ChatMemoryBuffer.from_defaults(token_limit=3000)
         
