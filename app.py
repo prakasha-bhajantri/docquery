@@ -4,6 +4,7 @@ from pydantic import BaseModel
 from core.rag_service import rag_service, TEMP_UPLOAD_DIR # Import service instance and path
 from typing import List
 import os
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- Pydantic Models ---
 class QueryRequest(BaseModel):
@@ -16,8 +17,20 @@ class DocumentListResponse(BaseModel):
     documents: List[str]
     selected_document: str
 
+
 # --- FastAPI App ---
 app = FastAPI(title="DocQuery RAG API")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 
 @app.get("/documents", response_model=DocumentListResponse)
 def list_documents():
@@ -79,3 +92,10 @@ async def chat_query(request: QueryRequest):
         return {"response": response_text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {e}")
+    
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.getenv("PORT", 8000))  # 8000 is only for local fallback
+    uvicorn.run(app, host="0.0.0.0", port=port)
