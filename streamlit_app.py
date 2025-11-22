@@ -300,7 +300,7 @@ for message in st.session_state.messages:
         st.markdown(message["content"])
 
 # React to user input
-if prompt := st.chat_input(f"Ask about: {st.session_state.selected_doc if st.session_state.selected_doc else 'No Document Selected'}..."):
+if prompt := st.chat_input(f"Ask about {"your document" if st.session_state.selected_doc else 'No Document Selected'}..."):
     # Display user message in chat message container
     with st.chat_message("user"):
         st.markdown(prompt)
